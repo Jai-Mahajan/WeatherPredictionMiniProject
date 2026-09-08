@@ -15,17 +15,41 @@ from io import StringIO
 START_YEAR = 2005
 END_YEAR = 2026
 
-K_VALUES = [3, 5, 7, 10, 15, 20, 30, 40, 50]
+K_VALUES = [
+    3,
+    5,
+    7,
+    10,
+    15,
+    20,
+    30,
+    40,
+    50
+]
 
 MODEL_FILE = "college_station_weather_model.json"
 PREDICTIONS_FILE = "weather_predictions.csv"
 
 
 # ============================================================
-# HELPERS
+# WEATHER STATIONS
+# ============================================================
+
+STATIONS = {
+    "CLL": "College Station",
+    "ACT": "Waco",
+    "AUS": "Austin",
+    "DFW": "Dallas Fort Worth",
+    "IAH": "Houston"
+}
+
+
+# ============================================================
+# BASIC HELPERS
 # ============================================================
 
 def safe_float(value):
+
     if value is None:
         return None
 
@@ -36,11 +60,13 @@ def safe_float(value):
 
     try:
         return float(value)
+
     except ValueError:
         return None
 
 
 def mean(values):
+
     if not values:
         return None
 
@@ -48,6 +74,7 @@ def mean(values):
 
 
 def circular_mean_degrees(values):
+
     if not values:
         return None
 
@@ -55,6 +82,7 @@ def circular_mean_degrees(values):
     cos_sum = 0.0
 
     for value in values:
+
         radians = math.radians(value)
 
         sin_sum += math.sin(radians)
@@ -74,6 +102,7 @@ def circular_mean_degrees(values):
 
 
 def first_mean(values, count=3):
+
     if not values:
         return None
 
@@ -81,6 +110,7 @@ def first_mean(values, count=3):
 
 
 def last_mean(values, count=3):
+
     if not values:
         return None
 
@@ -88,15 +118,22 @@ def last_mean(values, count=3):
 
 
 # ============================================================
-# DOWNLOAD DATA
+# DOWNLOAD ONE STATION
 # ============================================================
 
-def download_weather_data():
-    print("\nDownloading College Station weather data...")
+def download_station_data(
+    station,
+    station_name
+):
+
+    print(
+        f"\nDownloading {station_name} "
+        f"({station}) weather data..."
+    )
 
     url = (
         "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?"
-        "station=CLL"
+        f"station={station}"
         "&data=tmpf"
         "&data=dwpf"
         "&data=relh"
@@ -120,8 +157,27 @@ def download_weather_data():
         "&report_type=3"
     )
 
-    with urllib.request.urlopen(url, timeout=120) as response:
-        text = response.read().decode("utf-8")
+    try:
+
+        with urllib.request.urlopen(
+            url,
+            timeout=180
+        ) as response:
+
+            text = (
+                response
+                .read()
+                .decode("utf-8")
+            )
+
+    except Exception as error:
+
+        print(
+            f"ERROR downloading "
+            f"{station_name}: {error}"
+        )
+
+        return []
 
     rows = list(
         csv.DictReader(
@@ -130,20 +186,47 @@ def download_weather_data():
     )
 
     print(
-        f"Downloaded {len(rows):,} observations."
+        f"{station_name}: "
+        f"{len(rows):,} observations downloaded."
     )
 
     return rows
 
 
 # ============================================================
-# CREATE DAILY DATA
+# DOWNLOAD ALL STATIONS
 # ============================================================
 
-def create_daily_data(rows):
-    print(
-        "\nCleaning and converting observations to daily data..."
-    )
+def download_all_weather_data():
+
+    all_station_rows = {}
+
+    print("\n" + "=" * 60)
+    print("DOWNLOADING TEXAS WEATHER NETWORK")
+    print("=" * 60)
+
+    for station, name in STATIONS.items():
+
+        rows = download_station_data(
+            station,
+            name
+        )
+
+        all_station_rows[
+            station
+        ] = rows
+
+    return all_station_rows
+
+
+# ============================================================
+# CREATE DAILY WEATHER FOR ONE STATION
+# ============================================================
+
+def create_daily_station_data(
+    rows,
+    station_name
+):
 
     grouped = defaultdict(
         lambda: {
@@ -160,49 +243,132 @@ def create_daily_data(rows):
     for row in rows:
 
         try:
+
             timestamp = datetime.strptime(
                 row["valid"],
                 "%Y-%m-%d %H:%M"
             )
-        except (ValueError, KeyError):
+
+        except (
+            ValueError,
+            KeyError
+        ):
+
             continue
 
         date = timestamp.date()
 
-        temp = safe_float(row.get("tmpf"))
-        dew = safe_float(row.get("dwpf"))
-        humidity = safe_float(row.get("relh"))
-        wind = safe_float(row.get("sknt"))
-        direction = safe_float(row.get("drct"))
-        pressure = safe_float(row.get("alti"))
-        precip = safe_float(row.get("p01i"))
+        temp = safe_float(
+            row.get("tmpf")
+        )
 
-        if temp is not None and -20 <= temp <= 130:
-            grouped[date]["temps"].append(temp)
+        dew = safe_float(
+            row.get("dwpf")
+        )
 
-        if dew is not None and -40 <= dew <= 100:
-            grouped[date]["dewpoints"].append(dew)
+        humidity = safe_float(
+            row.get("relh")
+        )
 
-        if humidity is not None and 0 <= humidity <= 100:
-            grouped[date]["humidity"].append(humidity)
+        wind = safe_float(
+            row.get("sknt")
+        )
 
-        if wind is not None and 0 <= wind <= 100:
-            grouped[date]["wind"].append(wind)
+        direction = safe_float(
+            row.get("drct")
+        )
 
-        if direction is not None and 0 <= direction <= 360:
-            grouped[date]["direction"].append(direction)
+        pressure = safe_float(
+            row.get("alti")
+        )
 
-        if pressure is not None and 20 <= pressure <= 35:
-            grouped[date]["pressure"].append(pressure)
+        precip = safe_float(
+            row.get("p01i")
+        )
 
-        if precip is not None and precip >= 0:
-            grouped[date]["precipitation"].append(precip)
+        # ----------------------------------------------------
+        # BASIC QUALITY CONTROL
+        # ----------------------------------------------------
+
+        if (
+            temp is not None
+            and -30 <= temp <= 135
+        ):
+            grouped[
+                date
+            ]["temps"].append(
+                temp
+            )
+
+        if (
+            dew is not None
+            and -50 <= dew <= 105
+        ):
+            grouped[
+                date
+            ]["dewpoints"].append(
+                dew
+            )
+
+        if (
+            humidity is not None
+            and 0 <= humidity <= 100
+        ):
+            grouped[
+                date
+            ]["humidity"].append(
+                humidity
+            )
+
+        if (
+            wind is not None
+            and 0 <= wind <= 120
+        ):
+            grouped[
+                date
+            ]["wind"].append(
+                wind
+            )
+
+        if (
+            direction is not None
+            and 0 <= direction <= 360
+        ):
+            grouped[
+                date
+            ]["direction"].append(
+                direction
+            )
+
+        if (
+            pressure is not None
+            and 20 <= pressure <= 35
+        ):
+            grouped[
+                date
+            ]["pressure"].append(
+                pressure
+            )
+
+        if (
+            precip is not None
+            and precip >= 0
+        ):
+            grouped[
+                date
+            ]["precipitation"].append(
+                precip
+            )
 
     daily = {}
 
     for date, data in grouped.items():
 
-        if len(data["temps"]) < 12:
+        # Require at least 12 temperature
+        # observations for the day.
+        if len(
+            data["temps"]
+        ) < 12:
             continue
 
         if (
@@ -214,158 +380,342 @@ def create_daily_data(rows):
             continue
 
         temps = data["temps"]
-        dewpoints = data["dewpoints"]
-        pressures = data["pressure"]
 
-        wind_direction = circular_mean_degrees(
-            data["direction"]
+        dewpoints = (
+            data["dewpoints"]
+        )
+
+        pressures = (
+            data["pressure"]
+        )
+
+        wind_direction = (
+            circular_mean_degrees(
+                data["direction"]
+            )
         )
 
         if wind_direction is None:
             wind_direction = 0.0
 
-        temp_intraday_change = (
-            last_mean(temps)
-            - first_mean(temps)
-        )
-
-        pressure_intraday_change = (
-            last_mean(pressures)
-            - first_mean(pressures)
-        )
-
-        dewpoint_intraday_change = (
-            last_mean(dewpoints)
-            - first_mean(dewpoints)
-        )
-
         daily[date] = {
-            "date": date,
 
-            "max_temp": max(temps),
-            "min_temp": min(temps),
-            "avg_temp": mean(temps),
+            "max_temp":
+                max(temps),
 
-            "avg_dewpoint": mean(dewpoints),
-            "max_dewpoint": max(dewpoints),
+            "min_temp":
+                min(temps),
 
-            "avg_humidity": mean(data["humidity"]),
+            "avg_temp":
+                mean(temps),
 
-            "avg_wind": mean(data["wind"]),
-            "max_wind": max(data["wind"]),
+            "avg_dewpoint":
+                mean(dewpoints),
 
-            "wind_direction": wind_direction,
+            "avg_humidity":
+                mean(
+                    data["humidity"]
+                ),
 
-            "avg_pressure": mean(pressures),
+            "avg_wind":
+                mean(
+                    data["wind"]
+                ),
 
-            "precipitation": (
-                sum(data["precipitation"])
-                if data["precipitation"]
-                else 0.0
-            ),
+            "max_wind":
+                max(
+                    data["wind"]
+                ),
+
+            "wind_direction":
+                wind_direction,
+
+            "avg_pressure":
+                mean(pressures),
+
+            "precipitation":
+                sum(
+                    data[
+                        "precipitation"
+                    ]
+                )
+                if data[
+                    "precipitation"
+                ]
+                else 0.0,
+
+            # -----------------------------------------------
+            # INTRADAY CHANGE FEATURES
+            # -----------------------------------------------
 
             "temp_intraday_change":
-                temp_intraday_change,
+                last_mean(temps)
+                -
+                first_mean(temps),
 
             "pressure_intraday_change":
-                pressure_intraday_change,
+                last_mean(
+                    pressures
+                )
+                -
+                first_mean(
+                    pressures
+                ),
 
             "dewpoint_intraday_change":
-                dewpoint_intraday_change
+                last_mean(
+                    dewpoints
+                )
+                -
+                first_mean(
+                    dewpoints
+                )
         }
 
     print(
-        f"Usable daily observations: {len(daily):,}"
+        f"{station_name}: "
+        f"{len(daily):,} usable days"
     )
 
     return daily
 
 
 # ============================================================
-# FEATURES
+# CREATE DAILY DATA FOR ALL STATIONS
+# ============================================================
+
+def create_all_daily_data(
+    all_station_rows
+):
+
+    print("\n" + "=" * 60)
+    print("CREATING DAILY WEATHER DATA")
+    print("=" * 60)
+
+    daily_data = {}
+
+    for station, rows in (
+        all_station_rows.items()
+    ):
+
+        daily_data[
+            station
+        ] = create_daily_station_data(
+            rows,
+            STATIONS[station]
+        )
+
+    return daily_data
+
+
+# ============================================================
+# FEATURE NAMES
 # ============================================================
 
 FEATURE_NAMES = [
-    "max_temp",
-    "min_temp",
-    "avg_temp",
-    "avg_dewpoint",
-    "max_dewpoint",
-    "avg_humidity",
-    "avg_wind",
-    "max_wind",
-    "avg_pressure",
-    "precipitation",
 
-    "wind_direction_sin",
-    "wind_direction_cos",
+    # ========================================================
+    # COLLEGE STATION CURRENT WEATHER
+    # ========================================================
 
-    "max_temp_lag1",
-    "max_temp_lag2",
-    "max_temp_lag3",
-    "max_temp_lag5",
-    "max_temp_lag7",
+    "cll_max_temp",
+    "cll_min_temp",
+    "cll_avg_temp",
+    "cll_dewpoint",
+    "cll_humidity",
+    "cll_wind",
+    "cll_max_wind",
+    "cll_pressure",
+    "cll_precip",
 
-    "temp_3day_avg",
-    "temp_7day_avg",
+    "cll_wind_sin",
+    "cll_wind_cos",
 
-    "dewpoint_3day_avg",
-    "humidity_3day_avg",
-    "pressure_3day_avg",
+    "cll_temp_intraday",
+    "cll_pressure_intraday",
+    "cll_dewpoint_intraday",
 
-    "temp_change_1d",
-    "temp_change_2d",
+    # ========================================================
+    # COLLEGE STATION HISTORY
+    # ========================================================
 
-    "pressure_change_1d",
-    "pressure_change_2d",
+    "cll_high_lag1",
+    "cll_high_lag2",
+    "cll_high_lag3",
+    "cll_high_lag5",
+    "cll_high_lag7",
 
-    "dewpoint_change_1d",
-    "dewpoint_change_2d",
+    "cll_temp_3day_avg",
+    "cll_temp_7day_avg",
 
-    "temp_intraday_change",
-    "pressure_intraday_change",
-    "dewpoint_intraday_change",
+    "cll_temp_change_1d",
+    "cll_pressure_change_1d",
+    "cll_dewpoint_change_1d",
+
+    # ========================================================
+    # WACO
+    # ========================================================
+
+    "waco_temp",
+    "waco_dewpoint",
+    "waco_pressure",
+    "waco_wind",
+    "waco_wind_sin",
+    "waco_wind_cos",
+
+    "waco_temp_difference",
+    "waco_pressure_difference",
+
+    # ========================================================
+    # DALLAS
+    # ========================================================
+
+    "dfw_temp",
+    "dfw_dewpoint",
+    "dfw_pressure",
+    "dfw_wind",
+    "dfw_wind_sin",
+    "dfw_wind_cos",
+
+    "dfw_temp_difference",
+    "dfw_pressure_difference",
+
+    # ========================================================
+    # AUSTIN
+    # ========================================================
+
+    "austin_temp",
+    "austin_dewpoint",
+    "austin_pressure",
+    "austin_wind",
+
+    "austin_temp_difference",
+
+    # ========================================================
+    # HOUSTON
+    # ========================================================
+
+    "houston_temp",
+    "houston_dewpoint",
+    "houston_pressure",
+    "houston_wind",
+
+    "houston_temp_difference",
+
+    # ========================================================
+    # NORTH-SOUTH GRADIENTS
+    # ========================================================
+
+    "dfw_cll_temp_gradient",
+    "waco_cll_temp_gradient",
+
+    "dfw_cll_pressure_gradient",
+    "waco_cll_pressure_gradient",
+
+    # ========================================================
+    # SEASON
+    # ========================================================
 
     "day_sin",
     "day_cos"
 ]
 
 
+# ============================================================
+# CREATE FEATURE ROW
+# ============================================================
+
 def create_feature_row(
     date,
-    daily,
+    daily_data,
     require_target=True
 ):
 
-    current = daily.get(date)
+    cll_data = daily_data["CLL"]
+
+    current = cll_data.get(
+        date
+    )
 
     if current is None:
         return None
 
-    previous_days = []
+    # --------------------------------------------------------
+    # NEED 7 PREVIOUS CLL DAYS
+    # --------------------------------------------------------
 
-    for lag in range(1, 8):
+    previous = []
+
+    for lag in range(
+        1,
+        8
+    ):
+
         previous_date = (
             date
             - timedelta(days=lag)
         )
 
-        if previous_date not in daily:
+        if (
+            previous_date
+            not in cll_data
+        ):
             return None
 
-        previous_days.append(
-            daily[previous_date]
+        previous.append(
+            cll_data[
+                previous_date
+            ]
         )
 
-    tomorrow = daily.get(
-        date + timedelta(days=1)
+    tomorrow = cll_data.get(
+        date
+        + timedelta(days=1)
     )
 
-    if require_target and tomorrow is None:
+    if (
+        require_target
+        and tomorrow is None
+    ):
         return None
 
-    # Seasonal features
-    day_of_year = date.timetuple().tm_yday
+    # --------------------------------------------------------
+    # REQUIRE NEARBY STATIONS
+    # --------------------------------------------------------
+
+    waco = daily_data[
+        "ACT"
+    ].get(date)
+
+    austin = daily_data[
+        "AUS"
+    ].get(date)
+
+    dfw = daily_data[
+        "DFW"
+    ].get(date)
+
+    houston = daily_data[
+        "IAH"
+    ].get(date)
+
+    if (
+        waco is None
+        or austin is None
+        or dfw is None
+        or houston is None
+    ):
+        return None
+
+    # --------------------------------------------------------
+    # SEASONAL FEATURES
+    # --------------------------------------------------------
+
+    day_of_year = (
+        date
+        .timetuple()
+        .tm_yday
+    )
 
     day_sin = math.sin(
         2
@@ -381,150 +731,295 @@ def create_feature_row(
         / 365.25
     )
 
-    # Wind direction
-    wind_rad = math.radians(
-        current["wind_direction"]
+    # --------------------------------------------------------
+    # WIND DIRECTION FEATURES
+    # --------------------------------------------------------
+
+    cll_rad = math.radians(
+        current[
+            "wind_direction"
+        ]
     )
 
-    wind_sin = math.sin(wind_rad)
-    wind_cos = math.cos(wind_rad)
+    waco_rad = math.radians(
+        waco[
+            "wind_direction"
+        ]
+    )
 
-    # Rolling averages
+    dfw_rad = math.radians(
+        dfw[
+            "wind_direction"
+        ]
+    )
+
+    cll_wind_sin = math.sin(
+        cll_rad
+    )
+
+    cll_wind_cos = math.cos(
+        cll_rad
+    )
+
+    waco_wind_sin = math.sin(
+        waco_rad
+    )
+
+    waco_wind_cos = math.cos(
+        waco_rad
+    )
+
+    dfw_wind_sin = math.sin(
+        dfw_rad
+    )
+
+    dfw_wind_cos = math.cos(
+        dfw_rad
+    )
+
+    # --------------------------------------------------------
+    # ROLLING TEMPERATURE FEATURES
+    # --------------------------------------------------------
+
     temp_3day_avg = mean([
         current["max_temp"],
-        previous_days[0]["max_temp"],
-        previous_days[1]["max_temp"]
+        previous[0]["max_temp"],
+        previous[1]["max_temp"]
     ])
 
     temp_7day_avg = mean([
         current["max_temp"],
-        previous_days[0]["max_temp"],
-        previous_days[1]["max_temp"],
-        previous_days[2]["max_temp"],
-        previous_days[3]["max_temp"],
-        previous_days[4]["max_temp"],
-        previous_days[5]["max_temp"]
+        previous[0]["max_temp"],
+        previous[1]["max_temp"],
+        previous[2]["max_temp"],
+        previous[3]["max_temp"],
+        previous[4]["max_temp"],
+        previous[5]["max_temp"]
     ])
 
-    dewpoint_3day_avg = mean([
-        current["avg_dewpoint"],
-        previous_days[0]["avg_dewpoint"],
-        previous_days[1]["avg_dewpoint"]
-    ])
+    # --------------------------------------------------------
+    # LOCAL WEATHER CHANGE
+    # --------------------------------------------------------
 
-    humidity_3day_avg = mean([
-        current["avg_humidity"],
-        previous_days[0]["avg_humidity"],
-        previous_days[1]["avg_humidity"]
-    ])
-
-    pressure_3day_avg = mean([
-        current["avg_pressure"],
-        previous_days[0]["avg_pressure"],
-        previous_days[1]["avg_pressure"]
-    ])
-
-    # Day-to-day changes
     temp_change_1d = (
         current["max_temp"]
-        - previous_days[0]["max_temp"]
-    )
-
-    temp_change_2d = (
-        current["max_temp"]
-        - previous_days[1]["max_temp"]
+        -
+        previous[0]["max_temp"]
     )
 
     pressure_change_1d = (
         current["avg_pressure"]
-        - previous_days[0]["avg_pressure"]
-    )
-
-    pressure_change_2d = (
-        current["avg_pressure"]
-        - previous_days[1]["avg_pressure"]
+        -
+        previous[0]["avg_pressure"]
     )
 
     dewpoint_change_1d = (
         current["avg_dewpoint"]
-        - previous_days[0]["avg_dewpoint"]
+        -
+        previous[0]["avg_dewpoint"]
     )
 
-    dewpoint_change_2d = (
-        current["avg_dewpoint"]
-        - previous_days[1]["avg_dewpoint"]
+    # --------------------------------------------------------
+    # DIFFERENCES BETWEEN CITIES
+    #
+    # These are especially important for detecting
+    # fronts approaching College Station.
+    #
+    # Example:
+    #
+    # DFW 35°F
+    # CLL 65°F
+    #
+    # gradient = -30°F
+    #
+    # That may indicate much colder air to the north.
+    # --------------------------------------------------------
+
+    waco_temp_difference = (
+        waco["avg_temp"]
+        -
+        current["avg_temp"]
     )
+
+    dfw_temp_difference = (
+        dfw["avg_temp"]
+        -
+        current["avg_temp"]
+    )
+
+    austin_temp_difference = (
+        austin["avg_temp"]
+        -
+        current["avg_temp"]
+    )
+
+    houston_temp_difference = (
+        houston["avg_temp"]
+        -
+        current["avg_temp"]
+    )
+
+    waco_pressure_difference = (
+        waco["avg_pressure"]
+        -
+        current["avg_pressure"]
+    )
+
+    dfw_pressure_difference = (
+        dfw["avg_pressure"]
+        -
+        current["avg_pressure"]
+    )
+
+    # --------------------------------------------------------
+    # FINAL FEATURE VECTOR
+    # --------------------------------------------------------
 
     features = [
+
+        # CLL current weather
         current["max_temp"],
         current["min_temp"],
         current["avg_temp"],
         current["avg_dewpoint"],
-        current["max_dewpoint"],
         current["avg_humidity"],
         current["avg_wind"],
         current["max_wind"],
         current["avg_pressure"],
         current["precipitation"],
 
-        wind_sin,
-        wind_cos,
+        cll_wind_sin,
+        cll_wind_cos,
 
-        previous_days[0]["max_temp"],
-        previous_days[1]["max_temp"],
-        previous_days[2]["max_temp"],
-        previous_days[4]["max_temp"],
-        previous_days[6]["max_temp"],
+        current[
+            "temp_intraday_change"
+        ],
+
+        current[
+            "pressure_intraday_change"
+        ],
+
+        current[
+            "dewpoint_intraday_change"
+        ],
+
+        # CLL history
+        previous[0]["max_temp"],
+        previous[1]["max_temp"],
+        previous[2]["max_temp"],
+        previous[4]["max_temp"],
+        previous[6]["max_temp"],
 
         temp_3day_avg,
         temp_7day_avg,
 
-        dewpoint_3day_avg,
-        humidity_3day_avg,
-        pressure_3day_avg,
-
         temp_change_1d,
-        temp_change_2d,
-
         pressure_change_1d,
-        pressure_change_2d,
-
         dewpoint_change_1d,
-        dewpoint_change_2d,
 
-        current["temp_intraday_change"],
-        current["pressure_intraday_change"],
-        current["dewpoint_intraday_change"],
+        # Waco
+        waco["avg_temp"],
+        waco["avg_dewpoint"],
+        waco["avg_pressure"],
+        waco["avg_wind"],
 
+        waco_wind_sin,
+        waco_wind_cos,
+
+        waco_temp_difference,
+        waco_pressure_difference,
+
+        # Dallas
+        dfw["avg_temp"],
+        dfw["avg_dewpoint"],
+        dfw["avg_pressure"],
+        dfw["avg_wind"],
+
+        dfw_wind_sin,
+        dfw_wind_cos,
+
+        dfw_temp_difference,
+        dfw_pressure_difference,
+
+        # Austin
+        austin["avg_temp"],
+        austin["avg_dewpoint"],
+        austin["avg_pressure"],
+        austin["avg_wind"],
+
+        austin_temp_difference,
+
+        # Houston
+        houston["avg_temp"],
+        houston["avg_dewpoint"],
+        houston["avg_pressure"],
+        houston["avg_wind"],
+
+        houston_temp_difference,
+
+        # Explicit north-to-CLL gradients
+        dfw["avg_temp"]
+        -
+        current["avg_temp"],
+
+        waco["avg_temp"]
+        -
+        current["avg_temp"],
+
+        dfw["avg_pressure"]
+        -
+        current["avg_pressure"],
+
+        waco["avg_pressure"]
+        -
+        current["avg_pressure"],
+
+        # Season
         day_sin,
         day_cos
     ]
 
     return {
-        "date": date,
-        "features": features,
-        "target": (
+
+        "date":
+            date,
+
+        "features":
+            features,
+
+        "target":
             tomorrow["max_temp"]
             if tomorrow
-            else None
-        ),
-        "today_max": current["max_temp"]
+            else None,
+
+        "today_max":
+            current["max_temp"]
     }
 
 
-def create_ml_dataset(daily):
-    print(
-        "\nEngineering ML features..."
-    )
+# ============================================================
+# BUILD ML DATASET
+# ============================================================
+
+def create_ml_dataset(
+    daily_data
+):
+
+    print("\n" + "=" * 60)
+    print("ENGINEERING MULTI-CITY ML FEATURES")
+    print("=" * 60)
 
     dataset = []
 
     for date in sorted(
-        daily.keys()
+        daily_data[
+            "CLL"
+        ].keys()
     ):
+
         row = create_feature_row(
             date,
-            daily,
+            daily_data,
             require_target=True
         )
 
@@ -532,61 +1027,96 @@ def create_ml_dataset(daily):
             dataset.append(row)
 
     print(
-        f"Final ML samples: {len(dataset):,}"
+        f"Final multi-city ML samples: "
+        f"{len(dataset):,}"
     )
 
     return dataset
 
 
 # ============================================================
-# SPLIT
+# SPLIT DATA
 # ============================================================
 
-def split_dataset(dataset):
+def split_dataset(
+    dataset
+):
+
     train = []
     validation = []
     test = []
 
     for row in dataset:
 
-        if row["date"] < datetime(
-            2023, 1, 1
-        ).date():
+        if (
+            row["date"]
+            <
+            datetime(
+                2023,
+                1,
+                1
+            ).date()
+        ):
+
             train.append(row)
 
-        elif row["date"] < datetime(
-            2025, 1, 1
-        ).date():
-            validation.append(row)
+        elif (
+            row["date"]
+            <
+            datetime(
+                2025,
+                1,
+                1
+            ).date()
+        ):
+
+            validation.append(
+                row
+            )
 
         else:
-            test.append(row)
+
+            test.append(
+                row
+            )
 
     print("\nDataset Split")
     print("-" * 40)
 
     print(
-        f"Training:   {len(train):,}"
+        f"Training:   "
+        f"{len(train):,}"
     )
 
     print(
-        f"Validation: {len(validation):,}"
+        f"Validation: "
+        f"{len(validation):,}"
     )
 
     print(
-        f"Testing:    {len(test):,}"
+        f"Testing:    "
+        f"{len(test):,}"
     )
 
-    return train, validation, test
+    return (
+        train,
+        validation,
+        test
+    )
 
 
 # ============================================================
 # STANDARDIZATION
 # ============================================================
 
-def calculate_scaler(dataset):
+def calculate_scaler(
+    dataset
+):
+
     feature_count = len(
-        dataset[0]["features"]
+        dataset[0][
+            "features"
+        ]
     )
 
     means = []
@@ -597,20 +1127,30 @@ def calculate_scaler(dataset):
     ):
 
         values = [
-            row["features"][
+
+            row[
+                "features"
+            ][
                 feature_index
             ]
+
             for row in dataset
         ]
 
-        feature_mean = mean(values)
+        feature_mean = mean(
+            values
+        )
 
         variance = mean([
+
             (
                 value
-                - feature_mean
+                -
+                feature_mean
             ) ** 2
-            for value in values
+
+            for value
+            in values
         ])
 
         std = math.sqrt(
@@ -628,7 +1168,10 @@ def calculate_scaler(dataset):
             std
         )
 
-    return means, stds
+    return (
+        means,
+        stds
+    )
 
 
 def standardize(
@@ -636,31 +1179,48 @@ def standardize(
     means,
     stds
 ):
+
     return [
+
         (
             value
-            - means[i]
+            -
+            means[index]
         )
-        / stds[i]
+        /
+        stds[index]
 
-        for i, value
-        in enumerate(features)
+        for index, value
+        in enumerate(
+            features
+        )
     ]
 
 
 # ============================================================
-# KNN MODEL
+# KNN
 # ============================================================
 
-def squared_distance(a, b):
+def squared_distance(
+    a,
+    b
+):
+
     total = 0.0
 
-    for x, y in zip(a, b):
-        difference = x - y
+    for x, y in zip(
+        a,
+        b
+    ):
+
+        difference = (
+            x - y
+        )
 
         total += (
             difference
-            * difference
+            *
+            difference
         )
 
     return total
@@ -672,19 +1232,29 @@ def knn_predict(
     train_targets,
     k
 ):
+
     distances = []
 
-    for features, target in zip(
+    for (
+        features,
+        target
+    ) in zip(
         train_features,
         train_targets
     ):
-        d = squared_distance(
-            input_features,
-            features
+
+        distance = (
+            squared_distance(
+                input_features,
+                features
+            )
         )
 
         distances.append(
-            (d, target)
+            (
+                distance,
+                target
+            )
         )
 
     distances.sort(
@@ -692,34 +1262,44 @@ def knn_predict(
             item[0]
     )
 
-    nearest = distances[:k]
+    nearest = (
+        distances[:k]
+    )
 
     numerator = 0.0
     denominator = 0.0
 
-    for distance_value, target in nearest:
+    for (
+        distance,
+        target
+    ) in nearest:
 
         weight = (
             1.0
             /
             (
                 math.sqrt(
-                    distance_value
+                    distance
                 )
-                + 0.000001
+                +
+                0.000001
             )
         )
 
         numerator += (
             weight
-            * target
+            *
+            target
         )
 
-        denominator += weight
+        denominator += (
+            weight
+        )
 
     return (
         numerator
-        / denominator
+        /
+        denominator
     )
 
 
@@ -731,16 +1311,23 @@ def calculate_metrics(
     actual,
     predicted
 ):
+
     absolute_errors = []
+
     squared_errors = []
 
-    for actual_value, predicted_value in zip(
+    for (
+        actual_value,
+        predicted_value
+    ) in zip(
         actual,
         predicted
     ):
+
         error = (
             actual_value
-            - predicted_value
+            -
+            predicted_value
         )
 
         absolute_errors.append(
@@ -766,35 +1353,52 @@ def calculate_metrics(
     )
 
     ss_total = sum(
+
         (
             value
-            - actual_mean
+            -
+            actual_mean
         ) ** 2
 
-        for value in actual
+        for value
+        in actual
     )
 
     ss_residual = sum(
+
         (
-            actual[i]
-            - predicted[i]
+            actual[index]
+            -
+            predicted[index]
         ) ** 2
 
-        for i in range(
+        for index
+        in range(
             len(actual)
         )
     )
 
     if ss_total == 0:
-        r2 = 0
+
+        r2 = 0.0
+
     else:
+
         r2 = (
             1
-            - ss_residual
-            / ss_total
+            -
+            (
+                ss_residual
+                /
+                ss_total
+            )
         )
 
-    return mae, rmse, r2
+    return (
+        mae,
+        rmse,
+        r2
+    )
 
 
 def print_metrics(
@@ -802,34 +1406,46 @@ def print_metrics(
     actual,
     predicted
 ):
-    metrics = calculate_metrics(
-        actual,
-        predicted
+
+    mae, rmse, r2 = (
+        calculate_metrics(
+            actual,
+            predicted
+        )
     )
 
     print(
         f"\n{name}"
     )
 
-    print("-" * 40)
-
     print(
-        f"MAE:  {metrics[0]:.2f} °F"
+        "-" * 40
     )
 
     print(
-        f"RMSE: {metrics[1]:.2f} °F"
+        f"MAE:  "
+        f"{mae:.2f} °F"
     )
 
     print(
-        f"R²:   {metrics[2]:.3f}"
+        f"RMSE: "
+        f"{rmse:.2f} °F"
     )
 
-    return metrics
+    print(
+        f"R²:   "
+        f"{r2:.3f}"
+    )
+
+    return (
+        mae,
+        rmse,
+        r2
+    )
 
 
 # ============================================================
-# TUNE K
+# K TUNING
 # ============================================================
 
 def tune_k(
@@ -838,69 +1454,94 @@ def tune_k(
     means,
     stds
 ):
+
     print(
         "\nTUNING K USING VALIDATION DATA"
     )
 
-    print("=" * 50)
+    print(
+        "=" * 50
+    )
 
     train_features = [
+
         standardize(
             row["features"],
             means,
             stds
         )
+
         for row in train
     ]
 
     train_targets = [
+
         row["target"]
+
         for row in train
     ]
 
     validation_features = [
+
         standardize(
             row["features"],
             means,
             stds
         )
-        for row in validation
+
+        for row
+        in validation
     ]
 
     validation_targets = [
+
         row["target"]
-        for row in validation
+
+        for row
+        in validation
     ]
 
     best_k = None
-    best_mae = float("inf")
+
+    best_mae = float(
+        "inf"
+    )
 
     print(
         f"{'K':<10}"
         f"{'Validation MAE':>20}"
     )
 
-    print("-" * 30)
+    print(
+        "-" * 30
+    )
 
     for k in K_VALUES:
+
         predictions = []
 
-        for features in validation_features:
+        for index, features in enumerate(
+            validation_features
+        ):
 
-            prediction = knn_predict(
-                features,
-                train_features,
-                train_targets,
-                k
+            prediction = (
+                knn_predict(
+                    features,
+                    train_features,
+                    train_targets,
+                    k
+                )
             )
 
             predictions.append(
                 prediction
             )
 
-        mae, _, _ = calculate_metrics(
-            validation_targets,
-            predictions
+        mae, _, _ = (
+            calculate_metrics(
+                validation_targets,
+                predictions
+            )
         )
 
         print(
@@ -909,6 +1550,7 @@ def tune_k(
         )
 
         if mae < best_mae:
+
             best_mae = mae
             best_k = k
 
@@ -926,13 +1568,14 @@ def tune_k(
 
 
 # ============================================================
-# SAVE RESULTS
+# SAVE PREDICTIONS
 # ============================================================
 
 def save_predictions(
     test,
     predictions
 ):
+
     with open(
         PREDICTIONS_FILE,
         "w",
@@ -952,26 +1595,37 @@ def save_predictions(
             "absolute_error"
         ])
 
-        for row, prediction in zip(
+        for (
+            row,
+            prediction
+        ) in zip(
             test,
             predictions
         ):
 
             writer.writerow([
-                row["date"].isoformat(),
+
+                row[
+                    "date"
+                ].isoformat(),
 
                 (
                     row["date"]
-                    + timedelta(days=1)
+                    +
+                    timedelta(days=1)
                 ).isoformat(),
 
                 round(
-                    row["today_max"],
+                    row[
+                        "today_max"
+                    ],
                     2
                 ),
 
                 round(
-                    row["target"],
+                    row[
+                        "target"
+                    ],
                     2
                 ),
 
@@ -983,7 +1637,8 @@ def save_predictions(
                 round(
                     abs(
                         row["target"]
-                        - prediction
+                        -
+                        prediction
                     ),
                     2
                 )
@@ -995,6 +1650,10 @@ def save_predictions(
     )
 
 
+# ============================================================
+# SAVE MODEL
+# ============================================================
+
 def save_model(
     train_features,
     train_targets,
@@ -1002,9 +1661,14 @@ def save_model(
     stds,
     best_k
 ):
+
     model_data = {
+
         "model_type":
-            "Distance Weighted K-Nearest Neighbors Regression",
+            "Multi-City Distance Weighted KNN",
+
+        "stations":
+            STATIONS,
 
         "k":
             best_k,
@@ -1046,76 +1710,152 @@ def save_model(
 # ============================================================
 
 def main():
-    print("=" * 60)
+
     print(
-        "COLLEGE STATION WEATHER ML MODEL V2"
-    )
-    print("=" * 60)
-
-    rows = download_weather_data()
-
-    daily = create_daily_data(
-        rows
+        "=" * 65
     )
 
-    dataset = create_ml_dataset(
-        daily
+    print(
+        "COLLEGE STATION WEATHER ML MODEL V3"
     )
 
-    train, validation, test = split_dataset(
-        dataset
+    print(
+        "MULTI-CITY WEATHER NETWORK"
     )
 
-    # Use only training data for selecting K
-    train_means, train_stds = (
-        calculate_scaler(
-            train
+    print(
+        "=" * 65
+    )
+
+    # ========================================================
+    # DOWNLOAD WEATHER
+    # ========================================================
+
+    all_station_rows = (
+        download_all_weather_data()
+    )
+
+    # ========================================================
+    # DAILY WEATHER
+    # ========================================================
+
+    daily_data = (
+        create_all_daily_data(
+            all_station_rows
         )
     )
 
-    best_k = tune_k(
+    # ========================================================
+    # ML DATASET
+    # ========================================================
+
+    dataset = (
+        create_ml_dataset(
+            daily_data
+        )
+    )
+
+    if not dataset:
+
+        print(
+            "\nERROR: No ML samples generated."
+        )
+
+        return
+
+    # ========================================================
+    # SPLIT
+    # ========================================================
+
+    (
         train,
         validation,
+        test
+    ) = split_dataset(
+        dataset
+    )
+
+    # ========================================================
+    # SCALE TRAINING DATA
+    # ========================================================
+
+    (
         train_means,
+        train_stds
+    ) = calculate_scaler(
+        train
+    )
+
+    # ========================================================
+    # FIND BEST K
+    # ========================================================
+
+    best_k = tune_k(
+
+        train,
+
+        validation,
+
+        train_means,
+
         train_stds
     )
 
-    # After K is chosen, combine training + validation
+    # ========================================================
+    # COMBINE TRAIN + VALIDATION
+    # ========================================================
+
     final_training = (
         train
-        + validation
+        +
+        validation
     )
 
-    means, stds = calculate_scaler(
+    (
+        means,
+        stds
+    ) = calculate_scaler(
         final_training
     )
 
     train_features = [
+
         standardize(
             row["features"],
             means,
             stds
         )
-        for row in final_training
+
+        for row
+        in final_training
     ]
 
     train_targets = [
+
         row["target"]
-        for row in final_training
+
+        for row
+        in final_training
     ]
 
     test_features = [
+
         standardize(
             row["features"],
             means,
             stds
         )
-        for row in test
+
+        for row
+        in test
     ]
 
     test_targets = [
+
         row["target"]
-        for row in test
+
+        for row
+        in test
     ]
 
     # ========================================================
@@ -1123,22 +1863,29 @@ def main():
     # ========================================================
 
     baseline_predictions = [
-        row["today_max"]
-        for row in test
+
+        row[
+            "today_max"
+        ]
+
+        for row
+        in test
     ]
 
-    baseline_metrics = print_metrics(
-        "Persistence Baseline",
-        test_targets,
-        baseline_predictions
+    baseline_metrics = (
+        print_metrics(
+            "Persistence Baseline",
+            test_targets,
+            baseline_predictions
+        )
     )
 
     # ========================================================
-    # FINAL KNN MODEL
+    # RUN FINAL MODEL
     # ========================================================
 
     print(
-        "\nRunning final KNN model "
+        "\nRunning multi-city KNN "
         f"with k={best_k}..."
     )
 
@@ -1152,11 +1899,13 @@ def main():
         test_features
     ):
 
-        prediction = knn_predict(
-            features,
-            train_features,
-            train_targets,
-            best_k
+        prediction = (
+            knn_predict(
+                features,
+                train_features,
+                train_targets,
+                best_k
+            )
         )
 
         predictions.append(
@@ -1165,18 +1914,22 @@ def main():
 
         if (
             (index + 1) % 100 == 0
-            or index + 1 == total
+            or
+            index + 1 == total
         ):
+
             print(
                 f"Predicted "
                 f"{index + 1}/"
                 f"{total} test days"
             )
 
-    knn_metrics = print_metrics(
-        f"Improved KNN (k={best_k})",
-        test_targets,
-        predictions
+    model_metrics = (
+        print_metrics(
+            f"Multi-City KNN (k={best_k})",
+            test_targets,
+            predictions
+        )
     )
 
     # ========================================================
@@ -1187,7 +1940,9 @@ def main():
         "\nFINAL MODEL COMPARISON"
     )
 
-    print("=" * 65)
+    print(
+        "=" * 65
+    )
 
     print(
         f"{'Model':<30}"
@@ -1196,7 +1951,9 @@ def main():
         f"{'R²':>10}"
     )
 
-    print("-" * 65)
+    print(
+        "-" * 65
+    )
 
     print(
         f"{'Persistence Baseline':<30}"
@@ -1206,19 +1963,25 @@ def main():
     )
 
     print(
-        f"{'Improved KNN':<30}"
-        f"{knn_metrics[0]:>10.2f}"
-        f"{knn_metrics[1]:>10.2f}"
-        f"{knn_metrics[2]:>10.3f}"
+        f"{'Multi-City KNN':<30}"
+        f"{model_metrics[0]:>10.2f}"
+        f"{model_metrics[1]:>10.2f}"
+        f"{model_metrics[2]:>10.3f}"
     )
 
     improvement = (
+
         (
             baseline_metrics[0]
-            - knn_metrics[0]
+            -
+            model_metrics[0]
         )
-        / baseline_metrics[0]
-        * 100
+
+        /
+        baseline_metrics[0]
+
+        *
+        100
     )
 
     print(
@@ -1238,12 +2001,16 @@ def main():
     ):
 
         results.append({
+
             "input_date":
                 row["date"],
 
             "forecast_date":
                 row["date"]
-                + timedelta(days=1),
+                +
+                timedelta(
+                    days=1
+                ),
 
             "actual":
                 row["target"],
@@ -1254,7 +2021,8 @@ def main():
             "error":
                 abs(
                     row["target"]
-                    - prediction
+                    -
+                    prediction
                 )
         })
 
@@ -1268,7 +2036,9 @@ def main():
         "\nWORST 10 PREDICTIONS"
     )
 
-    print("=" * 85)
+    print(
+        "=" * 85
+    )
 
     print(
         f"{'Input Date':<15}"
@@ -1278,7 +2048,9 @@ def main():
         f"{'Error':>12}"
     )
 
-    print("-" * 85)
+    print(
+        "-" * 85
+    )
 
     for result in results[:10]:
 
@@ -1308,52 +2080,75 @@ def main():
     )
 
     # ========================================================
-    # LATEST PREDICTION
+    # LATEST FORECAST
     # ========================================================
 
     latest_date = max(
-        daily.keys()
+        daily_data[
+            "CLL"
+        ].keys()
     )
 
     latest_row = None
-    current_date = latest_date
 
-    for _ in range(30):
+    current_date = (
+        latest_date
+    )
 
-        candidate = create_feature_row(
-            current_date,
-            daily,
-            require_target=False
+    for _ in range(
+        30
+    ):
+
+        candidate = (
+            create_feature_row(
+                current_date,
+                daily_data,
+                require_target=False
+            )
         )
 
         if candidate is not None:
-            latest_row = candidate
+
+            latest_row = (
+                candidate
+            )
+
             break
 
-        current_date -= timedelta(
-            days=1
+        current_date -= (
+            timedelta(
+                days=1
+            )
         )
 
     if latest_row:
 
-        features = standardize(
-            latest_row["features"],
-            means,
-            stds
+        latest_features = (
+            standardize(
+                latest_row[
+                    "features"
+                ],
+                means,
+                stds
+            )
         )
 
-        prediction = knn_predict(
-            features,
-            train_features,
-            train_targets,
-            best_k
+        latest_prediction = (
+            knn_predict(
+                latest_features,
+                train_features,
+                train_targets,
+                best_k
+            )
         )
 
         print(
-            "\nLATEST DATASET PREDICTION"
+            "\nLATEST MULTI-CITY PREDICTION"
         )
 
-        print("=" * 60)
+        print(
+            "=" * 60
+        )
 
         print(
             "Weather input date:",
@@ -1363,22 +2158,24 @@ def main():
         )
 
         print(
-            "Observed high:",
+            "College Station observed high:",
             f"{latest_row['today_max']:.1f} °F"
         )
 
         print(
             "Predicted next-day high:",
-            f"{prediction:.1f} °F"
+            f"{latest_prediction:.1f} °F"
         )
 
     print(
-        "\n" + "=" * 60
+        "\n" + "=" * 65
     )
 
     print("DONE")
 
-    print("=" * 60)
+    print(
+        "=" * 65
+    )
 
 
 if __name__ == "__main__":
